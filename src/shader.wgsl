@@ -2,7 +2,7 @@
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
-    @location(1) color: vec3<f32>,
+    @location(1) vertex_position: vec2<f32>,
 };
 
 struct InstanceInput {
@@ -14,7 +14,7 @@ struct InstanceInput {
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) color: vec3<f32>,
+    @location(0) vertex_position: vec2<f32>,
 };
 
 @vertex
@@ -29,7 +29,7 @@ fn vs_main(
         instance.model_matrix_3,
     );
     var out: VertexOutput;
-    out.color = model.color;
+    out.vertex_position = model.vertex_position;
     out.clip_position = model_matrix * vec4<f32>(model.position, 1.0);
     return out;
 }
@@ -38,5 +38,6 @@ fn vs_main(
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return vec4<f32>(in.color, 1.0);
+    let a = 1.0 - (length(in.vertex_position - 0.5) * 2.0);
+    return vec4<f32>(1.0, 1.0, 1.0, a);
 }

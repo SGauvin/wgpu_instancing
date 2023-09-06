@@ -22,28 +22,24 @@ pub struct State {
 
 const VERTICES: &[Vertex] = &[
     Vertex {
-        position: [-0.0868241, 0.49240386, 0.0],
-        color: [0.5, 0.0, 0.5],
+        position: [-0.5, -0.5, 0.0],
+        vertex_position: [0.0, 0.0],
     },
     Vertex {
-        position: [-0.49513406, 0.06958647, 0.0],
-        color: [0.5, 0.0, 0.5],
+        position: [0.5, -0.5, 0.0],
+        vertex_position: [1.0, 0.0],
     },
     Vertex {
-        position: [-0.21918549, -0.44939706, 0.0],
-        color: [0.5, 0.0, 0.5],
+        position: [-0.5, 0.5, 0.0],
+        vertex_position: [0.0, 1.0],
     },
     Vertex {
-        position: [0.35966998, -0.3473291, 0.0],
-        color: [0.5, 0.0, 0.5],
-    },
-    Vertex {
-        position: [0.44147372, 0.2347359, 0.0],
-        color: [0.5, 0.0, 0.5],
+        position: [0.5, 0.5, 0.0],
+        vertex_position: [1.0, 1.0],
     },
 ];
 
-const INDICES: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
+const INDICES: &[u16] = &[0, 1, 2, 3, 2, 1];
 
 impl State {
     pub fn new(window: Window) -> Self {
@@ -123,7 +119,7 @@ impl State {
                 entry_point: "fs_main",
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
-                    blend: Some(wgpu::BlendState::REPLACE),
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
             }),
@@ -165,7 +161,7 @@ impl State {
         let instances = (0..10)
             .map(|i| {
                 let position = cgmath::Vector3 {
-                    x: i as f32,
+                    x: i as f32 * 1.1,
                     y: 0.0,
                     z: 0.0,
                 };
