@@ -1,7 +1,8 @@
+use cgmath::Rotation3;
 use wgpu::util::DeviceExt;
 use winit::window::Window;
 
-use crate::vertex::Vertex;
+use crate::vertex::{Instance, InstanceRaw, Vertex};
 
 pub struct State {
     surface: wgpu::Surface,
@@ -13,22 +14,36 @@ pub struct State {
     render_pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
     vertex_count: u32,
+    index_buffer: wgpu::Buffer,
+    index_count: u32,
+    instances: Vec<Instance>,
+    instance_buffer: wgpu::Buffer,
 }
 
-pub const VERTICES: &[Vertex] = &[
+const VERTICES: &[Vertex] = &[
     Vertex {
-        position: [0.0, 0.5, 0.0],
-        color: [1.0, 0.0, 0.0],
+        position: [-0.0868241, 0.49240386, 0.0],
+        color: [0.5, 0.0, 0.5],
     },
     Vertex {
-        position: [-0.5, -0.5, 0.0],
-        color: [0.0, 1.0, 0.0],
+        position: [-0.49513406, 0.06958647, 0.0],
+        color: [0.5, 0.0, 0.5],
     },
     Vertex {
-        position: [0.5, -0.5, 0.0],
-        color: [0.0, 0.0, 1.0],
+        position: [-0.21918549, -0.44939706, 0.0],
+        color: [0.5, 0.0, 0.5],
+    },
+    Vertex {
+        position: [0.35966998, -0.3473291, 0.0],
+        color: [0.5, 0.0, 0.5],
+    },
+    Vertex {
+        position: [0.44147372, 0.2347359, 0.0],
+        color: [0.5, 0.0, 0.5],
     },
 ];
+
+const INDICES: &[u16] = &[0, 1, 4, 1, 2, 4, 2, 3, 4];
 
 impl State {
     pub fn new(window: Window) -> Self {
@@ -101,7 +116,7 @@ impl State {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "vs_main",
-                buffers: &[Vertex::descriptor()],
+                buffers: &[Vertex::descriptor(), InstanceRaw::descriptor()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -138,8 +153,36 @@ impl State {
             contents: bytemuck::cast_slice(VERTICES),
             usage: wgpu::BufferUsages::VERTEX,
         });
-
         let vertex_count = VERTICES.len().try_into().unwrap();
+
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Index Buffer"),
+            contents: bytemuck::cast_slice(INDICES),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        let index_count = INDICES.len().try_into().unwrap();
+
+        let instances = (0..10)
+            .map(|i| {
+                let position = cgmath::Vector3 {
+                    x: i as f32,
+                    y: 0.0,
+                    z: 0.0,
+                };
+                let rotation = cgmath::Quaternion::from_axis_angle(
+                    cgmath::Vector3::unit_z(),
+                    cgmath::Deg(0.0),
+                );
+                Instance { position, rotation }
+            })
+            .collect::<Vec<_>>();
+
+        let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
+        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Instance Buffer"),
+            contents: bytemuck::cast_slice(&instance_data),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
 
         Self {
             window,
@@ -151,6 +194,10 @@ impl State {
             render_pipeline,
             vertex_buffer,
             vertex_count,
+            index_buffer,
+            index_count,
+            instances,
+            instance_buffer,
         }
     }
 
@@ -208,7 +255,9 @@ impl State {
 
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.draw(0..self.vertex_count, 0..1);
+            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            render_pass.draw_indexed(0..self.index_count, 0, 0..self.instances.len() as _);
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
