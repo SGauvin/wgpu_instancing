@@ -1,12 +1,22 @@
-use cgmath::Rotation3;
+use cgmath::{InnerSpace, Rotation3};
 use rand::Rng;
+use rayon::prelude::{
+    IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
+};
 use wgpu::util::DeviceExt;
-use winit::{window::Window, event::{WindowEvent, MouseScrollDelta}};
+use winit::{
+    event::{MouseScrollDelta, WindowEvent},
+    window::Window,
+};
 
 use crate::{
     camera::{Camera, CameraUniform},
     vertex::{Instance, InstanceRaw, Vertex},
 };
+
+struct ParticleCpuData {
+    speed: cgmath::Vector3<f32>,
+}
 
 pub struct State {
     surface: wgpu::Surface,
@@ -20,6 +30,8 @@ pub struct State {
     index_buffer: wgpu::Buffer,
     index_count: u32,
     instances: Vec<Instance>,
+    instances_raw: Vec<InstanceRaw>,
+    instances_cpu_data: Vec<ParticleCpuData>,
     instance_buffer: wgpu::Buffer,
     camera: Camera,
     camera_uniform: CameraUniform,
@@ -212,25 +224,51 @@ impl State {
         let index_count = INDICES.len().try_into().unwrap();
 
         let mut rng = rand::thread_rng();
-        let instances = (0..3_000_000)
+        let instances = (0..2_000_000)
             .map(|_| {
                 let x: f32 = (rng.gen::<f32>() - 0.5) * 850.0;
                 let y: f32 = (rng.gen::<f32>() - 0.5) * 820.0;
-                let z: f32 = (rng.gen::<f32>() - 0.5) * 1000.0;
+                let z: f32 = (rng.gen::<f32>() - 0.1) * 1000.0;
                 let position = cgmath::Vector3 { x, y, z };
                 let rotation = cgmath::Quaternion::from_axis_angle(
                     cgmath::Vector3::unit_z(),
                     cgmath::Deg(0.0),
                 );
-                Instance { position, rotation }
+                let color = cgmath::Vector4::new(
+                    0.12 + rng.gen::<f32>() / 4.0 + (x / 850.0 + 0.5) / 2.0,
+                    0.75 + rng.gen::<f32>() / 5.0,
+                    rng.gen(),
+                    1.0,
+                );
+                Instance {
+                    position,
+                    rotation,
+                    color,
+                }
             })
             .collect::<Vec<_>>();
 
-        let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
+        let instances_cpu_data = (0..instances.len())
+            .map(|_| ParticleCpuData {
+                speed: cgmath::Vector3::<f32>::new(
+                    rng.gen::<f32>() - 0.5,
+                    rng.gen::<f32>() - 0.5,
+                    rng.gen::<f32>() - 0.5,
+                )
+                .normalize()
+                    / 5.0,
+            })
+            .collect::<Vec<_>>();
+
+        let instances_raw = instances
+            .par_iter()
+            .map(Instance::to_raw)
+            .collect::<Vec<_>>();
+
         let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Instance Buffer"),
-            contents: bytemuck::cast_slice(&instance_data),
-            usage: wgpu::BufferUsages::VERTEX,
+            contents: bytemuck::cast_slice(&instances_raw),
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
 
         Self {
@@ -245,7 +283,9 @@ impl State {
             index_buffer,
             index_count,
             instances,
+            instances_raw,
             instance_buffer,
+            instances_cpu_data,
             camera,
             camera_bind_group,
             camera_buffer,
@@ -262,11 +302,12 @@ impl State {
     }
 
     pub fn input(&mut self, event: &winit::event::WindowEvent) -> bool {
-        if let WindowEvent::MouseWheel { delta, ..} = event {
+        if let WindowEvent::MouseWheel { delta, .. } = event {
             let MouseScrollDelta::PixelDelta(pos) = delta else {
                 return false;
             };
-            self.camera.eye.z *= (1.0 + (pos.y as f32) / 1000.0).max(0.1);
+            self.camera.eye.z += pos.y as f32 / 50.0;
+            self.camera.target = self.camera.eye + cgmath::Vector3::<f32>::new(0.0, 0.0, -1.0);
         }
         false
     }
@@ -283,6 +324,17 @@ impl State {
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         let start = std::time::Instant::now();
+
+        // Move particles
+        self.instances
+            .par_iter_mut()
+            .zip(&self.instances_cpu_data)
+            .map(|(instance, cpu_data)| {
+                instance.position += cpu_data.speed;
+                instance.to_raw()
+            })
+            .collect_into_vec(&mut self.instances_raw);
+
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
@@ -327,12 +379,24 @@ impl State {
             0,
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
+
+        self.queue.write_buffer(
+            &self.instance_buffer,
+            0,
+            bytemuck::cast_slice(&self.instances_raw),
+        );
+
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
         let end = std::time::Instant::now();
         let delta = end - start;
-        println!("Frame time: {}ms", delta.as_micros() as f32 / 1000.0);
+        println!(
+            "Frame time: {}ms | res: {}x{}",
+            delta.as_micros() as f32 / 1000.0,
+            self.size.height,
+            self.size.width
+        );
         Ok(())
     }
 }

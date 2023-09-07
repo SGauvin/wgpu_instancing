@@ -34,7 +34,8 @@ impl Vertex {
 #[derive(Copy, Clone, Pod, Zeroable)]
 pub struct InstanceRaw {
     // 4x4 transform matrix
-    model: [[f32; 4]; 4],
+    pub model: [[f32; 4]; 4],
+    pub color: [f32; 4],
 }
 
 impl InstanceRaw {
@@ -60,6 +61,11 @@ impl InstanceRaw {
                 shader_location: 5,
                 format: wgpu::VertexFormat::Float32x4,
             },
+            wgpu::VertexAttribute {
+                offset: std::mem::size_of::<[f32; 16]>() as wgpu::BufferAddress,
+                shader_location: 6,
+                format: wgpu::VertexFormat::Float32x4,
+            },
         ];
 
         wgpu::VertexBufferLayout {
@@ -73,6 +79,7 @@ impl InstanceRaw {
 pub struct Instance {
     pub position: cgmath::Vector3<f32>,
     pub rotation: cgmath::Quaternion<f32>,
+    pub color: cgmath::Vector4<f32>
 }
 
 impl Instance {
@@ -81,6 +88,7 @@ impl Instance {
             model: (cgmath::Matrix4::from_translation(self.position)
                 * cgmath::Matrix4::from(self.rotation))
             .into(),
+            color: self.color.into(),
         }
     }
 }
