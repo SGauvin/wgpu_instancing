@@ -1,5 +1,6 @@
 mod state;
 mod vertex;
+mod camera;
 
 use crate::state::State;
 use log::warn;
