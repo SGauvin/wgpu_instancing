@@ -1,6 +1,7 @@
 use cgmath::Rotation3;
+use rand::Rng;
 use wgpu::util::DeviceExt;
-use winit::window::Window;
+use winit::{window::Window, event::{WindowEvent, MouseScrollDelta}};
 
 use crate::{
     camera::{Camera, CameraUniform},
@@ -108,15 +109,15 @@ impl State {
         let camera = Camera {
             // position the camera one unit up and 2 units back
             // +z is out of the screen
-            eye: (0.0, 1.0, 50.0).into(),
+            eye: (0.0, 1.0, 1000.0).into(),
             // have it look at the origin
-            target: (0.0, 0.0, 0.0).into(),
+            target: (0.0, 0.0, -100.0).into(),
             // which way is "up"
             up: cgmath::Vector3::unit_y(),
             aspect: config.width as f32 / config.height as f32,
             fovy: 20.0,
             znear: 0.1,
-            zfar: 100.0,
+            zfar: 2000.0,
         };
 
         let mut camera_uniform = CameraUniform::new();
@@ -202,7 +203,6 @@ impl State {
             contents: bytemuck::cast_slice(VERTICES),
             usage: wgpu::BufferUsages::VERTEX,
         });
-        // let vertex_count = VERTICES.len().try_into().unwrap();
 
         let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Index Buffer"),
@@ -211,13 +211,13 @@ impl State {
         });
         let index_count = INDICES.len().try_into().unwrap();
 
-        let instances = (0..10)
-            .map(|i| {
-                let position = cgmath::Vector3 {
-                    x: i as f32 * 1.1,
-                    y: 0.0,
-                    z: 0.0,
-                };
+        let mut rng = rand::thread_rng();
+        let instances = (0..1000000)
+            .map(|_| {
+                let x: f32 = (rng.gen::<f32>() - 0.5) * 850.0;
+                let y: f32 = (rng.gen::<f32>() - 0.5) * 820.0;
+                let z: f32 = (rng.gen::<f32>() - 0.5) * 1000.0;
+                let position = cgmath::Vector3 { x, y, z };
                 let rotation = cgmath::Quaternion::from_axis_angle(
                     cgmath::Vector3::unit_z(),
                     cgmath::Deg(0.0),
@@ -261,7 +261,14 @@ impl State {
         &self.size
     }
 
-    pub fn input(&mut self, _event: &winit::event::WindowEvent) -> bool {
+    pub fn input(&mut self, event: &winit::event::WindowEvent) -> bool {
+        println!("{event:?}");
+        if let WindowEvent::MouseWheel { delta, ..} = event {
+            let MouseScrollDelta::PixelDelta(pos) = delta else {
+                return false;
+            };
+            self.camera.eye.z *= (1.0 + (pos.y as f32) / 1000.0).max(0.1);
+        }
         false
     }
 
@@ -295,7 +302,7 @@ impl State {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 1.0,
+                            r: 0.0,
                             g: 0.0,
                             b: 0.0,
                             a: 1.0,
