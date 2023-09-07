@@ -212,7 +212,7 @@ impl State {
         let index_count = INDICES.len().try_into().unwrap();
 
         let mut rng = rand::thread_rng();
-        let instances = (0..1000000)
+        let instances = (0..3_000_000)
             .map(|_| {
                 let x: f32 = (rng.gen::<f32>() - 0.5) * 850.0;
                 let y: f32 = (rng.gen::<f32>() - 0.5) * 820.0;
@@ -262,7 +262,6 @@ impl State {
     }
 
     pub fn input(&mut self, event: &winit::event::WindowEvent) -> bool {
-        println!("{event:?}");
         if let WindowEvent::MouseWheel { delta, ..} = event {
             let MouseScrollDelta::PixelDelta(pos) = delta else {
                 return false;
@@ -283,6 +282,7 @@ impl State {
     }
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
+        let start = std::time::Instant::now();
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
@@ -330,6 +330,9 @@ impl State {
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
 
+        let end = std::time::Instant::now();
+        let delta = end - start;
+        println!("Frame time: {}ms", delta.as_micros() as f32 / 1000.0);
         Ok(())
     }
 }
