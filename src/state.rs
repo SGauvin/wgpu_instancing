@@ -1,3 +1,4 @@
+use bytemuck::{Pod, Zeroable};
 use cgmath::{InnerSpace, Rotation3};
 use rand::Rng;
 use rayon::prelude::{
@@ -106,7 +107,7 @@ impl State {
             format: surface_format,
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::Fifo,
+            present_mode: wgpu::PresentMode::Immediate,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
         };
@@ -326,14 +327,14 @@ impl State {
         let start = std::time::Instant::now();
 
         // Move particles
-        self.instances
-            .par_iter_mut()
-            .zip(&self.instances_cpu_data)
-            .map(|(instance, cpu_data)| {
-                instance.position += cpu_data.speed;
-                instance.to_raw()
-            })
-            .collect_into_vec(&mut self.instances_raw);
+        // self.instances
+        //     .par_iter_mut()
+        //     .zip(&self.instances_cpu_data)
+        //     .map(|(instance, cpu_data)| {
+        //         instance.position += cpu_data.speed;
+        //         instance.to_raw()
+        //     })
+        //     .collect_into_vec(&mut self.instances_raw);
 
         let output = self.surface.get_current_texture()?;
         let view = output
@@ -380,11 +381,11 @@ impl State {
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
 
-        self.queue.write_buffer(
-            &self.instance_buffer,
-            0,
-            bytemuck::cast_slice(&self.instances_raw),
-        );
+        // self.queue.write_buffer(
+        //     &self.instance_buffer,
+        //     0,
+        //     bytemuck::cast_slice(&self.instances_raw),
+        // );
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
@@ -394,9 +395,40 @@ impl State {
         println!(
             "Frame time: {}ms | res: {}x{}",
             delta.as_micros() as f32 / 1000.0,
-            self.size.height,
-            self.size.width
+            self.size.width,
+            self.size.height
         );
         Ok(())
+    }
+
+    fn create_compute_pipeline(&mut self) {
+        // let cpu_data_buffer = self
+        //     .device
+        //     .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        //         label: Some("Cpu Data Buffer"),
+        //         usage: wgpu::BufferUsages::STORAGE,
+        //         contents: bytemuck::cast_slice(&self.instances_cpu_data),
+        //     });
+        //
+        // let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        //     entries: &[
+        //         wgpu::BindGroupLayoutEntry {
+        //             binding: 0,
+        //             visibility: wgpu::ShaderStages::COMPUTE,
+        //             ty: wgpu::BindingType::Buffer {
+        //                 ty: wgpu::BufferBindingType::Storage { read_only: false },
+        //                 has_dynamic_offset: false,
+        //                 min_binding_size: None,
+        //             },
+        //             count: None,
+        //         },
+        //     ],
+        //     label: None,
+        // });
+        //
+        // let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        //     bind_group_layouts: &[&bind_group_layout],
+        //     ..Default::default()
+        // });
     }
 }
