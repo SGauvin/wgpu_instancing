@@ -1,5 +1,4 @@
 use bytemuck::{Pod, Zeroable};
-use cgmath::{InnerSpace, Rotation3};
 use rand::Rng;
 use rayon::prelude::{
     IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
@@ -16,7 +15,7 @@ use crate::{
 };
 
 struct ParticleCpuData {
-    speed: cgmath::Vector3<f32>,
+    speed: glam::Vec3,
 }
 
 pub struct State {
@@ -126,11 +125,11 @@ impl State {
             // have it look at the origin
             target: (0.0, 0.0, -100.0).into(),
             // which way is "up"
-            up: cgmath::Vector3::unit_y(),
+            up: glam::Vec3::Y,
             aspect: config.width as f32 / config.height as f32,
             fovy: 20.0,
-            znear: 0.1,
-            zfar: 2000.0,
+            znear: 0.0,
+            zfar: 10000.0,
         };
 
         let mut camera_uniform = CameraUniform::new();
@@ -230,12 +229,9 @@ impl State {
                 let x: f32 = (rng.gen::<f32>() - 0.5) * 850.0;
                 let y: f32 = (rng.gen::<f32>() - 0.5) * 820.0;
                 let z: f32 = (rng.gen::<f32>() - 0.1) * 1000.0;
-                let position = cgmath::Vector3 { x, y, z };
-                let rotation = cgmath::Quaternion::from_axis_angle(
-                    cgmath::Vector3::unit_z(),
-                    cgmath::Deg(0.0),
-                );
-                let color = cgmath::Vector4::new(
+                let position = glam::Vec3::new(x, y, z);
+                let rotation = glam::Quat::from_axis_angle(glam::Vec3::Z, 0.0);
+                let color = glam::Vec4::new(
                     0.12 + rng.gen::<f32>() / 4.0 + (x / 850.0 + 0.5) / 2.0,
                     0.75 + rng.gen::<f32>() / 5.0,
                     rng.gen(),
@@ -251,7 +247,7 @@ impl State {
 
         let instances_cpu_data = (0..instances.len())
             .map(|_| ParticleCpuData {
-                speed: cgmath::Vector3::<f32>::new(
+                speed: glam::Vec3::new(
                     rng.gen::<f32>() - 0.5,
                     rng.gen::<f32>() - 0.5,
                     rng.gen::<f32>() - 0.5,
@@ -308,7 +304,7 @@ impl State {
                 return false;
             };
             self.camera.eye.z += pos.y as f32 / 50.0;
-            self.camera.target = self.camera.eye + cgmath::Vector3::<f32>::new(0.0, 0.0, -1.0);
+            self.camera.target = self.camera.eye + glam::Vec3::new(0.0, 0.0, -1.0);
         }
         false
     }
