@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use bytemuck::{Pod, Zeroable};
 
 #[repr(C)]
@@ -36,6 +38,12 @@ pub struct InstanceRaw {
     // 4x4 transform matrix
     pub model: glam::Mat4,
     pub color: glam::Vec4,
+}
+
+impl Display for InstanceRaw {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.model.fmt(f)
+    }
 }
 
 impl InstanceRaw {

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use bytemuck::{Pod, Zeroable};
 use rand::Rng;
 use rayon::prelude::{
@@ -14,8 +16,17 @@ use crate::{
     vertex::{Instance, InstanceRaw, Vertex},
 };
 
+#[repr(C)]
+#[derive(Copy, Clone, Pod, Zeroable)]
 struct ParticleCpuData {
     speed: glam::Vec3,
+    _unused: f32,
+}
+
+struct ComputePipeline {
+    pipeline: wgpu::ComputePipeline,
+    bind_group: wgpu::BindGroup,
+    cpu_data_buffer: wgpu::Buffer,
 }
 
 pub struct State {
@@ -37,6 +48,7 @@ pub struct State {
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+    compute_pipeline: Option<ComputePipeline>,
 }
 
 const VERTICES: &[Vertex] = &[
@@ -224,7 +236,7 @@ impl State {
         let index_count = INDICES.len().try_into().unwrap();
 
         let mut rng = rand::thread_rng();
-        let instances = (0..2_000_000)
+        let instances = (0..10_000)
             .map(|_| {
                 let x: f32 = (rng.gen::<f32>() - 0.5) * 850.0;
                 let y: f32 = (rng.gen::<f32>() - 0.5) * 820.0;
@@ -254,6 +266,7 @@ impl State {
                 )
                 .normalize()
                     / 5.0,
+                _unused: 0.0,
             })
             .collect::<Vec<_>>();
 
@@ -265,8 +278,17 @@ impl State {
         let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Instance Buffer"),
             contents: bytemuck::cast_slice(&instances_raw),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::VERTEX
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::STORAGE,
         });
+
+        let compute_pipeline = Some(Self::create_compute_pipeline(
+            &device,
+            &instances_cpu_data,
+            &instance_buffer,
+        ));
 
         Self {
             window,
@@ -287,6 +309,7 @@ impl State {
             camera_bind_group,
             camera_buffer,
             camera_uniform,
+            compute_pipeline,
         }
     }
 
@@ -319,32 +342,94 @@ impl State {
         }
     }
 
+    fn move_particles(&mut self) {
+        if let Some(compute_pipeline) = &self.compute_pipeline {
+            let mut encoder = self
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Compute Encoder"),
+                });
+
+            {
+                let mut raytracing_pass = encoder.begin_compute_pass(&Default::default());
+                raytracing_pass.set_pipeline(&compute_pipeline.pipeline);
+                raytracing_pass.set_bind_group(0, &compute_pipeline.bind_group, &[]);
+                raytracing_pass.dispatch_workgroups(10_000, 1, 1);
+            }
+
+            // let tmp = Arc::new(self.device.create_buffer(&wgpu::BufferDescriptor {
+            //     label: Some("Gang!"),
+            //     mapped_at_creation: false,
+            //     size: (std::mem::size_of::<InstanceRaw>() * self.instances_raw.len()) as _,
+            //     usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            // }));
+
+            // encoder.copy_buffer_to_buffer(&self.instance_buffer, 0, &tmp, 0, tmp.size());
+
+            self.queue.submit(Some(encoder.finish()));
+
+            // let tmp_clone = tmp.clone();
+            // tmp.slice(..).map_async(wgpu::MapMode::Read, move |x| {
+            //     x.unwrap();
+            //
+            //     let a = tmp_clone.slice(..).get_mapped_range().iter().copied().collect::<Vec<_>>();
+            //     let b: &[InstanceRaw] = bytemuck::cast_slice(&a);
+            //     for c in b {
+            //         // println!("gpu transformed: {c}");
+            //     }
+            // });
+            //
+            // let a = self.instances
+            //     .par_iter_mut()
+            //     .zip(&self.instances_cpu_data)
+            //     .map(|(instance, cpu_data)| {
+            //         instance.position += cpu_data.speed;
+            //         instance.to_raw()
+            //     })
+            //     .collect::<Vec<_>>();
+            //
+            // for b in a {
+            //     // println!("cpu transformed: {b}");
+            // }
+
+        } else {
+            // Move particles
+            self.instances
+                .par_iter_mut()
+                .zip(&self.instances_cpu_data)
+                .map(|(instance, cpu_data)| {
+                    instance.position += cpu_data.speed;
+                    instance.to_raw()
+                })
+                .collect_into_vec(&mut self.instances_raw);
+
+            self.queue.write_buffer(
+                &self.instance_buffer,
+                0,
+                bytemuck::cast_slice(&self.instances_raw),
+            );
+        }
+    }
+
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         let start = std::time::Instant::now();
-
-        // Move particles
-        // self.instances
-        //     .par_iter_mut()
-        //     .zip(&self.instances_cpu_data)
-        //     .map(|(instance, cpu_data)| {
-        //         instance.position += cpu_data.speed;
-        //         instance.to_raw()
-        //     })
-        //     .collect_into_vec(&mut self.instances_raw);
+        self.move_particles();
 
         let output = self.surface.get_current_texture()?;
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            });
+        let mut encoders = vec![];
+
+        let mut render_encoder =
+            self.device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("Render Encoder"),
+                });
 
         {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut render_pass = render_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &view,
@@ -377,13 +462,8 @@ impl State {
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
 
-        // self.queue.write_buffer(
-        //     &self.instance_buffer,
-        //     0,
-        //     bytemuck::cast_slice(&self.instances_raw),
-        // );
-
-        self.queue.submit(std::iter::once(encoder.finish()));
+        encoders.push(render_encoder.finish());
+        self.queue.submit(encoders);
         output.present();
 
         let end = std::time::Instant::now();
@@ -397,34 +477,79 @@ impl State {
         Ok(())
     }
 
-    fn create_compute_pipeline(&mut self) {
-        // let cpu_data_buffer = self
-        //     .device
-        //     .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        //         label: Some("Cpu Data Buffer"),
-        //         usage: wgpu::BufferUsages::STORAGE,
-        //         contents: bytemuck::cast_slice(&self.instances_cpu_data),
-        //     });
-        //
-        // let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        //     entries: &[
-        //         wgpu::BindGroupLayoutEntry {
-        //             binding: 0,
-        //             visibility: wgpu::ShaderStages::COMPUTE,
-        //             ty: wgpu::BindingType::Buffer {
-        //                 ty: wgpu::BufferBindingType::Storage { read_only: false },
-        //                 has_dynamic_offset: false,
-        //                 min_binding_size: None,
-        //             },
-        //             count: None,
-        //         },
-        //     ],
-        //     label: None,
-        // });
-        //
-        // let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        //     bind_group_layouts: &[&bind_group_layout],
-        //     ..Default::default()
-        // });
+    fn create_compute_pipeline(
+        device: &wgpu::Device,
+        instances_cpu_data: &[ParticleCpuData],
+        instance_buffer: &wgpu::Buffer,
+    ) -> ComputePipeline {
+        let cpu_data_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Cpu Data Buffer"),
+            usage: wgpu::BufferUsages::STORAGE,
+            contents: bytemuck::cast_slice(instances_cpu_data),
+        });
+
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+            label: None,
+        });
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &bind_group_layout,
+            label: None,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: cpu_data_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: instance_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            bind_group_layouts: &[&bind_group_layout],
+            ..Default::default()
+        });
+
+        let cs_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: None,
+            source: wgpu::ShaderSource::Wgsl(include_str!("compute_kernel.wgsl").into()),
+        });
+
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Compute Pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &cs_module,
+            entry_point: "main",
+        });
+
+        ComputePipeline {
+            pipeline,
+            bind_group,
+            cpu_data_buffer,
+        }
     }
 }
