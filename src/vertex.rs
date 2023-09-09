@@ -33,7 +33,7 @@ impl Vertex {
 }
 
 #[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
+#[derive(Copy, Clone, Pod, Zeroable, Debug)]
 pub struct InstanceRaw {
     // 4x4 transform matrix
     pub model: glam::Mat4,

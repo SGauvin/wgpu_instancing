@@ -1,13 +1,14 @@
-use std::sync::Arc;
+use std::{future, sync::Arc};
 
 use bytemuck::{Pod, Zeroable};
+use glam::Vec4Swizzles;
 use rand::Rng;
 use rayon::prelude::{
     IndexedParallelIterator, IntoParallelRefIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
 use wgpu::util::DeviceExt;
 use winit::{
-    event::{MouseScrollDelta, WindowEvent},
+    event::{MouseScrollDelta, VirtualKeyCode, WindowEvent},
     window::Window,
 };
 
@@ -49,6 +50,8 @@ pub struct State {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     compute_pipeline: Option<ComputePipeline>,
+    frame_time_samples: [f32; 25],
+    frame_time_index: usize,
 }
 
 const VERTICES: &[Vertex] = &[
@@ -98,7 +101,7 @@ impl State {
             &wgpu::DeviceDescriptor {
                 features: wgpu::Features::empty(),
                 limits: wgpu::Limits::default(),
-                label: None,
+                label: Some("4"),
             },
             None,
         ))
@@ -133,7 +136,7 @@ impl State {
         let camera = Camera {
             // position the camera one unit up and 2 units back
             // +z is out of the screen
-            eye: (0.0, 1.0, 1000.0).into(),
+            eye: (0.0, 1.0, 5000.0).into(),
             // have it look at the origin
             target: (0.0, 0.0, -100.0).into(),
             // which way is "up"
@@ -236,7 +239,12 @@ impl State {
         let index_count = INDICES.len().try_into().unwrap();
 
         let mut rng = rand::thread_rng();
-        let instances = (0..10_000)
+        let max_particle_count = adapter
+            .limits()
+            .max_storage_buffer_binding_size
+            .min(adapter.limits().max_uniform_buffer_binding_size);
+
+        let instances = (0..1_500_000)
             .map(|_| {
                 let x: f32 = (rng.gen::<f32>() - 0.5) * 850.0;
                 let y: f32 = (rng.gen::<f32>() - 0.5) * 820.0;
@@ -310,6 +318,8 @@ impl State {
             camera_buffer,
             camera_uniform,
             compute_pipeline,
+            frame_time_samples: Default::default(),
+            frame_time_index: 0,
         }
     }
 
@@ -328,6 +338,62 @@ impl State {
             };
             self.camera.eye.z += pos.y as f32 / 50.0;
             self.camera.target = self.camera.eye + glam::Vec3::new(0.0, 0.0, -1.0);
+
+            return true;
+        }
+
+        if let WindowEvent::KeyboardInput { input, .. } = event {
+            if input.virtual_keycode == Some(VirtualKeyCode::R) {
+                let mut encoder =
+                    self.device
+                        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                            label: Some("Compute Encoder"),
+                        });
+
+                let tmp_buffer = Arc::new(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Gang!"),
+                    mapped_at_creation: false,
+                    size: (std::mem::size_of::<InstanceRaw>() * self.instances_raw.len()) as _,
+                    usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                }));
+
+                encoder.copy_buffer_to_buffer(
+                    &self.instance_buffer,
+                    0,
+                    &tmp_buffer,
+                    0,
+                    tmp_buffer.size(),
+                );
+                self.queue.submit(Some(encoder.finish()));
+
+                let tmp_clone = tmp_buffer.clone();
+                // let (sender, receiver) = futures::channel::oneshot::channel::<Vec<InstanceRaw>>();
+                tmp_buffer
+                    .slice(..)
+                    .map_async(wgpu::MapMode::Read, move |x| {
+                        x.unwrap();
+                        let gpu_data_bytes = tmp_clone
+                            .slice(..)
+                            .get_mapped_range()
+                            .iter()
+                            .copied()
+                            .collect::<Vec<_>>();
+                        let gpu_data: &[InstanceRaw] = bytemuck::cast_slice(&gpu_data_bytes);
+                        let gpu_data_vec = gpu_data.to_vec();
+                        // println!("YESSIR");
+                        // sender.send(gpu_data_vec).unwrap();
+                    });
+
+                // println!("Waiting!");
+                // self.instances_raw = futures::executor::block_on(receiver).unwrap();
+                // println!("Done!");
+
+                for (instance, raw) in self.instances.iter_mut().zip(&self.instances_raw) {
+                    instance.position = raw.model.w_axis.xyz();
+                }
+
+                self.compute_pipeline = None;
+            }
         }
         false
     }
@@ -354,7 +420,7 @@ impl State {
                 let mut raytracing_pass = encoder.begin_compute_pass(&Default::default());
                 raytracing_pass.set_pipeline(&compute_pipeline.pipeline);
                 raytracing_pass.set_bind_group(0, &compute_pipeline.bind_group, &[]);
-                raytracing_pass.dispatch_workgroups(10_000, 1, 1);
+                raytracing_pass.dispatch_workgroups(10_000, 150, 1);
             }
 
             // let tmp = Arc::new(self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -391,7 +457,6 @@ impl State {
             // for b in a {
             //     // println!("cpu transformed: {b}");
             // }
-
         } else {
             // Move particles
             self.instances
@@ -468,9 +533,13 @@ impl State {
 
         let end = std::time::Instant::now();
         let delta = end - start;
+        self.frame_time_samples[self.frame_time_index] = delta.as_micros() as f32;
+        self.frame_time_index = (self.frame_time_index + 1) % self.frame_time_samples.len();
+        let average_frame_time_us: f32 =
+            self.frame_time_samples.iter().sum::<f32>() / self.frame_time_samples.len() as f32;
         println!(
             "Frame time: {}ms | res: {}x{}",
-            delta.as_micros() as f32 / 1000.0,
+            average_frame_time_us / 1000.0,
             self.size.width,
             self.size.height
         );
@@ -511,12 +580,12 @@ impl State {
                     count: None,
                 },
             ],
-            label: None,
+            label: Some("1"),
         });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &bind_group_layout,
-            label: None,
+            label: Some("2"),
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -535,7 +604,7 @@ impl State {
         });
 
         let cs_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: None,
+            label: Some("3"),
             source: wgpu::ShaderSource::Wgsl(include_str!("compute_kernel.wgsl").into()),
         });
 

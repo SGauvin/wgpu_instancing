@@ -18,7 +18,7 @@ var<storage, read_write> instances: array<InstanceInput>;
 
 @compute @workgroup_size(1,1,1)
 fn main(@builtin(global_invocation_id) GlobalInvocationID : vec3<u32>) {
-    let index = GlobalInvocationID.x + (GlobalInvocationID.y * u32(1));
+    let index = GlobalInvocationID.x + (GlobalInvocationID.y * u32(10000));
     var instance: InstanceInput = instances[index];
     let model_matrix = mat4x4<f32>(
         instance.model_matrix_0,
